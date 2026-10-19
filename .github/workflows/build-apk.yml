@@ -1,0 +1,96 @@
+name: Build Shared Money Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Show repository layout
+        run: |
+          echo "=== Current directory ==="
+          pwd
+          echo ""
+          echo "=== Files at repository root ==="
+          ls -la
+          echo ""
+          echo "=== Looking for settings.gradle ==="
+          find . -name "settings.gradle" 2>/dev/null || true
+
+      # Auto-fix: if project is nested (e.g. SharedMoney/settings.gradle),
+      # promote that folder's contents to the workspace root.
+      - name: Fix nested project structure
+        run: |
+          if [ -f settings.gradle ]; then
+            echo "Project is already at repository root. OK."
+            exit 0
+          fi
+
+          # Find the first settings.gradle under any subfolder
+          FOUND=$(find . -name "settings.gradle" -not -path "./.git/*" | head -1)
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: settings.gradle not found anywhere in the repository."
+            echo "Push the full project files (settings.gradle, app/, gradle/, etc.) to GitHub."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$FOUND")
+          echo "Found nested project at: $PROJECT_DIR"
+          echo "Moving contents to repository root..."
+
+          # Move everything from the nested folder to root (including hidden .github)
+          shopt -s dotglob
+          # Copy then remove to avoid overwriting issues with existing workflow folder
+          cp -a "$PROJECT_DIR"/. .
+          # Remove the nested folder only if it is not "." 
+          if [ "$PROJECT_DIR" != "." ]; then
+            rm -rf "$PROJECT_DIR"
+          fi
+          shopt -u dotglob
+
+          echo "=== After fix ==="
+          ls -la
+          test -f settings.gradle && echo "settings.gradle is now at root. OK."
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Validate project structure
+        run: |
+          echo "=== Final layout ==="
+          ls -la
+          test -f settings.gradle || { echo "ERROR: settings.gradle still missing"; exit 1; }
+          test -f app/build.gradle || { echo "ERROR: app/build.gradle missing"; exit 1; }
+          test -f app/src/main/AndroidManifest.xml || { echo "ERROR: AndroidManifest.xml missing"; exit 1; }
+          test -f app/src/main/java/com/sharedmoney/app/MainActivity.java || { echo "ERROR: MainActivity.java missing"; exit 1; }
+          test -f app/src/main/assets/index.html || { echo "ERROR: index.html missing"; exit 1; }
+          test -f gradlew || { echo "ERROR: gradlew missing"; exit 1; }
+          echo "Project structure OK"
+
+      - name: Build debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SharedMoney-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
